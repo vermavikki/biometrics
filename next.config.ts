@@ -12,6 +12,17 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  // face
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        encoding: false,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;
