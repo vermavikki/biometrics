@@ -58,3 +58,4 @@ export async function inspectDeviceAndCamera(stream: MediaStream): Promise<Devic
         userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "Server",
     };
 }
+

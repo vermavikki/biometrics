@@ -6,18 +6,87 @@ import * as faceapi from "@vladmandic/face-api";
 
 let modelsLoaded = false;
 let modelLoadingPromise: Promise<void> | null = null;
+let backendInitialized = false;
+let backendInitPromise: Promise<string> | null = null;
 
 // Local public directory model URL with fallback CDN
 const LOCAL_MODEL_URL = "/models";
 const CDN_MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/";
+
+interface TfEngine {
+    ready: () => Promise<void>;
+    setBackend: (backend: string) => Promise<boolean>;
+    getBackend: () => string;
+    removeBackend?: (backend: string) => void;
+}
+
+/**
+ * Explicitly initialize and await the TensorFlow.js execution backend.
+ * Avoids: "Backend 'undefined' has not yet been initialized" and
+ * "The highest priority backend 'wasm' has not yet been initialized".
+ */
+export async function initTfBackend(): Promise<string> {
+    const tf = faceapi.tf as unknown as TfEngine | undefined;
+
+    if (backendInitialized && tf) {
+        return tf.getBackend();
+    }
+    if (backendInitPromise) {
+        return backendInitPromise;
+    }
+
+    backendInitPromise = (async () => {
+        if (typeof window === "undefined" || !tf) {
+            return "server";
+        }
+
+        // 1. Deregister uninitialized wasm backend so it never preempts webgl/cpu
+        if (typeof tf.removeBackend === "function") {
+            try {
+                tf.removeBackend("wasm");
+            } catch {
+                // Ignore if wasm was not registered
+            }
+        }
+
+        // 2. Explicitly select WebGL for GPU acceleration (do NOT call findBackend before setBackend)
+        try {
+            await tf.setBackend("webgl");
+        } catch (webglErr) {
+            console.warn("[FaceAPI] WebGL not available, falling back to CPU backend:", webglErr);
+            try {
+                await tf.setBackend("cpu");
+            } catch (cpuErr) {
+                console.warn("[FaceAPI] CPU backend failed to set:", cpuErr);
+            }
+        }
+
+        // 3. Await tf.ready() so the selected backend is guaranteed to be fully initialized
+        try {
+            await tf.ready();
+        } catch (readyErr) {
+            console.warn("[FaceAPI] tf.ready() error:", readyErr);
+        }
+
+        backendInitialized = true;
+        const currentBackend = tf.getBackend ? tf.getBackend() : "unknown";
+        console.log(`[FaceAPI] Execution backend active: ${currentBackend}`);
+        return currentBackend;
+    })();
+
+    return await backendInitPromise;
+}
 
 export async function loadFaceModels(): Promise<void> {
     if (modelsLoaded) return;
     if (modelLoadingPromise) return modelLoadingPromise;
 
     modelLoadingPromise = (async () => {
+        // 1. MUST initialize and await tf backend before calling any model loaders or inference
+        await initTfBackend();
+
+        // 2. Load models from local /models first, falling back to CDN if necessary
         try {
-            // Attempt loading from local public directory first (fast & offline)
             await Promise.all([
                 faceapi.nets.ssdMobilenetv1.loadFromUri(LOCAL_MODEL_URL),
                 faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_MODEL_URL),
@@ -27,7 +96,6 @@ export async function loadFaceModels(): Promise<void> {
             modelsLoaded = true;
         } catch (localErr) {
             console.warn("Failed loading models from local /models, falling back to CDN:", localErr);
-            // Fallback to CDN
             await Promise.all([
                 faceapi.nets.ssdMobilenetv1.loadFromUri(CDN_MODEL_URL),
                 faceapi.nets.faceLandmark68Net.loadFromUri(CDN_MODEL_URL),
@@ -69,6 +137,7 @@ export function getAverageEAR(landmarks: faceapi.FaceLandmarks68): number {
 
 // Lightweight frame check used inside the real-time liveness loop
 export async function detectLandmarksOnly(videoElement: HTMLVideoElement) {
+    await initTfBackend();
     return await faceapi
         .detectSingleFace(
             videoElement,
@@ -79,6 +148,7 @@ export async function detectLandmarksOnly(videoElement: HTMLVideoElement) {
 
 // Comprehensive multi-detection check to verify EXACTLY ONE face is present
 export async function detectAllFacesWithLandmarks(videoElement: HTMLVideoElement) {
+    await initTfBackend();
     return await faceapi
         .detectAllFaces(
             videoElement,
@@ -90,6 +160,7 @@ export async function detectAllFacesWithLandmarks(videoElement: HTMLVideoElement
 
 // Full extraction called upon verification completion
 export async function extractFaceData(videoElement: HTMLVideoElement) {
+    await initTfBackend();
     const detection = await faceapi
         .detectSingleFace(
             videoElement,

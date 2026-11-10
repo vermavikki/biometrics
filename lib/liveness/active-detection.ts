@@ -299,3 +299,4 @@ export function evaluateChallengeFrame(
             return { isSatisfied: false, progress: 0, currentMetric: 0 };
     }
 }
+

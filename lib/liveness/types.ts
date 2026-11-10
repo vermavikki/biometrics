@@ -108,3 +108,4 @@ export interface FaceAlignmentStatus {
     boxRatio: number;        // Face width / Video width
     feedbackText: string;
 }
+

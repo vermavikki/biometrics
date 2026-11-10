@@ -199,3 +199,4 @@ COMMENT ON TABLE public.user_face_profiles IS 'Enrolled face embeddings (128D) f
 COMMENT ON TABLE public.face_verification_sessions IS 'Server-issued cryptographic liveness verification sessions with one-time challenges.';
 COMMENT ON TABLE public.face_verification_logs IS 'Audit trail recording all face liveness outcomes, presentation attack detection, and decisions.';
 COMMENT ON TABLE public.face_rate_limits IS 'Failed attempt counter and temporary lockout mechanism for biometric security.';
+
