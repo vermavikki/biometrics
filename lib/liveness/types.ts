@@ -72,6 +72,20 @@ export interface LivenessSessionResponse {
     message?: string;
 }
 
+export interface UserRegistrationData {
+    fullName: string;
+    email: string;
+    phone: string;
+    password?: string;
+}
+
+export interface UserProfileSummary {
+    userId?: string;
+    fullName?: string;
+    email?: string;
+    phone?: string;
+}
+
 export interface LivenessVerificationRequest {
     sessionToken: string;
     mode: "enroll" | "verify";
@@ -80,6 +94,7 @@ export interface LivenessVerificationRequest {
     deviceTelemetry: DeviceTelemetry;
     descriptor: number[];
     imageBase64?: string;
+    registrationData?: UserRegistrationData;
 }
 
 export interface LivenessVerificationResult {
@@ -92,6 +107,7 @@ export interface LivenessVerificationResult {
     spoofIndicators: string[];
     rejectionReason?: string;
     auditLogId?: string;
+    userProfile?: UserProfileSummary;
 }
 
 export interface HeadPose {

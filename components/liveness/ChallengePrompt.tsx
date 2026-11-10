@@ -10,11 +10,14 @@ import {
     ArrowDown,
     CircleDot,
     Sparkles,
+    CheckCircle2,
+    Clock,
 } from "lucide-react";
 import type { ChallengeStep } from "@/lib/liveness/types";
 
 interface ChallengePromptProps {
     challenge: ChallengeStep | null;
+    allChallenges?: ChallengeStep[];
     stepIndex: number;
     totalSteps: number;
     timeLeftSeconds: number;
@@ -23,6 +26,7 @@ interface ChallengePromptProps {
 
 export default function ChallengePrompt({
     challenge,
+    allChallenges = [],
     stepIndex,
     totalSteps,
     timeLeftSeconds,
@@ -30,83 +34,173 @@ export default function ChallengePrompt({
 }: ChallengePromptProps) {
     if (!challenge) {
         return (
-            <div className="flex flex-col items-center justify-center py-2 text-center">
-                <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                    Align your face to begin
-                </span>
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                    Keep your head still and look directly into the camera
-                </span>
+            <div className="w-full flex flex-col items-center justify-center p-3 sm:p-4 bg-muted/50 rounded-xl border border-border text-center">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                    <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                    Phase 1: Face Alignment
+                </div>
+                <h3 className="text-sm sm:text-base font-bold text-foreground">
+                    Center Your Face In The Oval Guide
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5 max-w-xs">
+                    Hold still at eye level. Interactive challenges will begin as soon as your face is aligned.
+                </p>
             </div>
         );
     }
 
-    // Render animated challenge icon
-    const renderIcon = () => {
-        const iconClass = "w-7 h-7 text-blue-600 dark:text-blue-400";
+    // Render animated challenge icon & direction indicator
+    const renderActionGraphic = () => {
+        const iconSize = "w-7 h-7 sm:w-8 sm:h-8";
         switch (challenge.type) {
             case "BLINK":
                 return (
                     <div className="relative flex items-center justify-center">
-                        <Eye className={`${iconClass} animate-pulse`} />
-                        <div className="absolute inset-0 rounded-full bg-blue-500/20 blur-sm animate-ping" />
+                        <Eye className={`${iconSize} text-blue-500 animate-pulse`} />
+                        <span className="absolute -inset-1 rounded-full bg-blue-500/20 blur-sm animate-ping" />
                     </div>
                 );
             case "TURN_LEFT":
-                return <ArrowLeft className={`${iconClass} -translate-x-1 animate-bounce`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <ArrowLeft className={`${iconSize} text-blue-500 animate-bounce -translate-x-1`} />
+                    </div>
+                );
             case "TURN_RIGHT":
-                return <ArrowRight className={`${iconClass} translate-x-1 animate-bounce`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <ArrowRight className={`${iconSize} text-blue-500 animate-bounce translate-x-1`} />
+                    </div>
+                );
             case "LOOK_UP":
-                return <ArrowUp className={`${iconClass} -translate-y-1 animate-bounce`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <ArrowUp className={`${iconSize} text-blue-500 animate-bounce -translate-y-1`} />
+                    </div>
+                );
             case "LOOK_DOWN":
-                return <ArrowDown className={`${iconClass} translate-y-1 animate-bounce`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <ArrowDown className={`${iconSize} text-blue-500 animate-bounce translate-y-1`} />
+                    </div>
+                );
             case "SMILE":
-                return <Smile className={`${iconClass} scale-110 animate-pulse`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <Smile className={`${iconSize} text-amber-500 scale-110 animate-pulse`} />
+                    </div>
+                );
             case "OPEN_MOUTH":
-                return <CircleDot className={`${iconClass} scale-125 animate-pulse`} />;
+                return (
+                    <div className="flex items-center justify-center">
+                        <CircleDot className={`${iconSize} text-purple-500 scale-125 animate-pulse`} />
+                    </div>
+                );
             default:
-                return <Sparkles className={iconClass} />;
+                return <Sparkles className={`${iconSize} text-blue-500`} />;
         }
     };
 
+    const isNearlyComplete = actionProgress >= 0.85;
+    const progressPercent = Math.min(100, Math.max(0, Math.round(actionProgress * 100)));
+
     return (
-        <div className="w-full flex flex-col items-center p-3.5 bg-blue-50/80 dark:bg-blue-950/40 rounded-xl border border-blue-200/80 dark:border-blue-800/50 shadow-sm transition-all">
-            {/* Step badges and countdown timer */}
-            <div className="flex items-center justify-between w-full mb-1.5 px-1 text-xs">
-                <div className="flex items-center gap-1.5 font-semibold text-blue-700 dark:text-blue-300">
-                    <span className="flex h-2 w-2 rounded-full bg-blue-600 animate-ping" />
-                    <span>
-                        Challenge {stepIndex + 1} of {totalSteps}
+        <div className="w-full flex flex-col p-3.5 sm:p-4 bg-card rounded-2xl border border-primary/20 shadow-md transition-all">
+            {/* Top Bar: "WHEN" Info (Sequence & Time Left) */}
+            <div className="flex items-center justify-between w-full mb-2">
+                <div className="flex items-center gap-1.5">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-primary">
+                        Action {stepIndex + 1} of {totalSteps}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground px-2 py-0.5 rounded-full bg-muted font-medium">
+                        Active Challenge
                     </span>
                 </div>
-                <div className="font-mono text-xs px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200">
-                    {timeLeftSeconds}s remaining
+
+                {/* Countdown Timer */}
+                <div
+                    className={`flex items-center gap-1 text-xs font-mono font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                        timeLeftSeconds <= 3
+                            ? "bg-destructive/15 text-destructive animate-pulse"
+                            : "bg-muted text-muted-foreground"
+                    }`}
+                >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{timeLeftSeconds}s</span>
                 </div>
             </div>
 
-            {/* Icon + Instruction */}
-            <div className="flex items-center gap-3 my-1">
-                <div className="flex items-center justify-center w-11 h-11 rounded-full bg-white dark:bg-blue-900/60 shadow-sm border border-blue-100 dark:border-blue-800">
-                    {renderIcon()}
+            {/* Instruction Body: "WHAT TO DO" */}
+            <div className="flex items-center gap-3 sm:gap-4 my-1">
+                {/* Action Icon Badge */}
+                <div className="flex-shrink-0 flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-primary/10 border border-primary/20 shadow-inner">
+                    {renderActionGraphic()}
                 </div>
-                <div className="text-left">
-                    <h3 className="text-base font-bold text-gray-900 dark:text-gray-100 leading-tight">
-                        {challenge.prompt}
-                    </h3>
-                    <p className="text-xs text-gray-600 dark:text-gray-300 leading-snug">
+
+                {/* Action Text */}
+                <div className="flex-1 text-left min-w-0">
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-base sm:text-lg font-extrabold text-foreground tracking-tight leading-tight">
+                            {challenge.prompt}
+                        </h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 leading-snug">
                         {challenge.instruction}
                     </p>
                 </div>
             </div>
 
-            {/* Action metric progress bar */}
-            <div className="w-full mt-2 bg-blue-100 dark:bg-blue-900/40 rounded-full h-1.5 overflow-hidden">
-                <div
-                    className="bg-blue-600 dark:bg-blue-400 h-full transition-all duration-150 rounded-full"
-                    style={{ width: `${Math.min(100, Math.max(8, actionProgress * 100))}%` }}
-                />
+            {/* Real-Time Action Progress Meter */}
+            <div className="mt-3 pt-2.5 border-t border-border/60">
+                <div className="flex items-center justify-between text-[11px] mb-1 font-medium">
+                    <span className="text-muted-foreground flex items-center gap-1">
+                        Movement recognition:
+                        <strong className={isNearlyComplete ? "text-emerald-500" : "text-foreground"}>
+                            {isNearlyComplete ? "Target reached! Hold still..." : `${progressPercent}%`}
+                        </strong>
+                    </span>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                        {isNearlyComplete ? "Validating..." : "Follow motion"}
+                    </span>
+                </div>
+
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden relative">
+                    <div
+                        className={`h-full rounded-full transition-all duration-150 ${
+                            isNearlyComplete
+                                ? "bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.7)]"
+                                : "bg-primary"
+                        }`}
+                        style={{ width: `${Math.max(5, progressPercent)}%` }}
+                    />
+                </div>
             </div>
+
+            {/* Sequence Dots: Visual progress through all challenges */}
+            {allChallenges.length > 0 && (
+                <div className="flex items-center justify-center gap-1.5 mt-3 pt-2 border-t border-border/40">
+                    {allChallenges.map((step, idx) => {
+                        const isDone = idx < stepIndex;
+                        const isCurrent = idx === stepIndex;
+                        return (
+                            <div
+                                key={step.id || idx}
+                                className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all ${
+                                    isDone
+                                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold"
+                                        : isCurrent
+                                        ? "bg-primary text-primary-foreground font-bold shadow-sm scale-105"
+                                        : "bg-muted text-muted-foreground"
+                                }`}
+                            >
+                                {isDone && <CheckCircle2 className="w-3 h-3 text-emerald-500" />}
+                                <span>{step.type.replace("_", " ")}</span>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
         </div>
     );
 }
-

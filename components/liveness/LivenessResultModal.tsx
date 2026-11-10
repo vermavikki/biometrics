@@ -51,7 +51,29 @@ export default function LivenessResultModal({
             </p>
 
             {/* Metrics breakdown card */}
-            <div className="w-full my-4 p-3 rounded-xl bg-gray-50 dark:bg-muted/40 border border-gray-200 dark:border-border text-xs space-y-2">
+            <div className="w-full my-4 p-3.5 rounded-xl bg-gray-50 dark:bg-muted/40 border border-gray-200 dark:border-border text-xs space-y-2.5">
+                {/* Registered or Verified User Identity Card */}
+                {result.userProfile && (
+                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg space-y-1 mb-2 text-left">
+                        <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                            Bound User Profile
+                        </div>
+                        {result.userProfile.fullName && (
+                            <div className="text-sm font-bold text-foreground">
+                                {result.userProfile.fullName}
+                            </div>
+                        )}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pt-0.5">
+                            {result.userProfile.email && (
+                                <span>Email: <strong className="text-foreground">{result.userProfile.email}</strong></span>
+                            )}
+                            {result.userProfile.phone && (
+                                <span>Phone: <strong className="text-foreground">{result.userProfile.phone}</strong></span>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 <div className="flex justify-between items-center text-gray-600 dark:text-gray-300">
                     <span>Security Decision:</span>
                     <span

@@ -16,11 +16,19 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- 2. Base table for enrolled facial biometric profiles
 CREATE TABLE IF NOT EXISTS public.user_face_profiles (
     user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    full_name TEXT,
+    email TEXT,
+    phone TEXT,
     image_path TEXT NOT NULL,
     embedding vector(128) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Ensure columns exist if table was already created
+ALTER TABLE public.user_face_profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE public.user_face_profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE public.user_face_profiles ADD COLUMN IF NOT EXISTS phone TEXT;
 
 -- Index for biometric vector similarity search
 CREATE INDEX IF NOT EXISTS idx_user_face_profiles_embedding 
@@ -29,13 +37,18 @@ USING ivfflat (embedding vector_l2_ops)
 WITH (lists = 100);
 
 -- 3. Stored Procedure: verify_user_face using pgvector Euclidean distance
+-- Supports both 1:1 verification (current authenticated user) and 1:N biometric identification
 CREATE OR REPLACE FUNCTION public.verify_user_face(
     candidate_embedding vector(128),
     match_threshold DOUBLE PRECISION DEFAULT 0.45
 )
 RETURNS TABLE (
     is_match BOOLEAN,
-    distance DOUBLE PRECISION
+    distance DOUBLE PRECISION,
+    user_id UUID,
+    full_name TEXT,
+    email TEXT,
+    phone TEXT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -43,31 +56,53 @@ SET search_path = public
 AS $$
 DECLARE
     current_uid UUID;
-    stored_embedding vector(128);
-    calculated_distance DOUBLE PRECISION;
+    stored_profile RECORD;
 BEGIN
     current_uid := auth.uid();
     
-    IF current_uid IS NULL THEN
-        RAISE EXCEPTION 'Not authenticated';
-    END IF;
+    -- If user is authenticated, match against their own enrolled face (1:1 verification)
+    IF current_uid IS NOT NULL THEN
+        SELECT p.user_id, p.full_name, p.email, p.phone, (p.embedding <-> candidate_embedding) AS dist
+        INTO stored_profile
+        FROM public.user_face_profiles p
+        WHERE p.user_id = current_uid;
 
-    SELECT embedding INTO stored_embedding
-    FROM public.user_face_profiles
-    WHERE user_id = current_uid;
+        IF stored_profile.user_id IS NULL THEN
+            RETURN QUERY SELECT FALSE, 999.0::DOUBLE PRECISION, NULL::UUID, NULL::TEXT, NULL::TEXT, NULL::TEXT;
+            RETURN;
+        END IF;
 
-    IF stored_embedding IS NULL THEN
-        RETURN QUERY SELECT FALSE, 999.0::DOUBLE PRECISION;
+        RETURN QUERY
+        SELECT 
+            (stored_profile.dist <= match_threshold) AS is_match,
+            stored_profile.dist AS distance,
+            stored_profile.user_id,
+            stored_profile.full_name,
+            stored_profile.email,
+            stored_profile.phone;
         RETURN;
     END IF;
 
-    -- Calculate L2 Euclidean distance between vectors
-    calculated_distance := stored_embedding <-> candidate_embedding;
+    -- If user is not yet logged in, perform 1:N identification to find the nearest matching profile
+    SELECT p.user_id, p.full_name, p.email, p.phone, (p.embedding <-> candidate_embedding) AS dist
+    INTO stored_profile
+    FROM public.user_face_profiles p
+    ORDER BY p.embedding <-> candidate_embedding ASC
+    LIMIT 1;
+
+    IF stored_profile.user_id IS NULL THEN
+        RETURN QUERY SELECT FALSE, 999.0::DOUBLE PRECISION, NULL::UUID, NULL::TEXT, NULL::TEXT, NULL::TEXT;
+        RETURN;
+    END IF;
 
     RETURN QUERY
     SELECT 
-        (calculated_distance <= match_threshold) AS is_match,
-        calculated_distance AS distance;
+        (stored_profile.dist <= match_threshold) AS is_match,
+        stored_profile.dist AS distance,
+        stored_profile.user_id,
+        stored_profile.full_name,
+        stored_profile.email,
+        stored_profile.phone;
 END;
 $$;
 

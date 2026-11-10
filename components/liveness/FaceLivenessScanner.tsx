@@ -30,6 +30,7 @@ import type {
     PassiveAnalysisMetrics,
     DeviceTelemetry,
     LivenessVerificationResult,
+    UserRegistrationData,
 } from "@/lib/liveness/types";
 import FaceOvalGuide from "./FaceOvalGuide";
 import ChallengePrompt from "./ChallengePrompt";
@@ -38,6 +39,7 @@ import LivenessResultModal from "./LivenessResultModal";
 
 interface FaceLivenessScannerProps {
     mode: "enroll" | "verify";
+    registrationData?: UserRegistrationData;
     onSuccess?: (result: LivenessVerificationResult) => void;
     onFailure?: (result: LivenessVerificationResult) => void;
 }
@@ -52,6 +54,7 @@ type ScannerStage =
 
 export default function FaceLivenessScanner({
     mode,
+    registrationData,
     onSuccess,
     onFailure,
 }: FaceLivenessScannerProps) {
@@ -124,6 +127,7 @@ export default function FaceLivenessScanner({
                     deviceTelemetry: device,
                     descriptor,
                     imageBase64,
+                    registrationData,
                 });
 
                 setVerificationResult(result);
@@ -152,7 +156,7 @@ export default function FaceLivenessScanner({
                 isProcessingRef.current = false;
             }
         },
-        [mode, onSuccess, onFailure]
+        [mode, registrationData, onSuccess, onFailure]
     );
 
     // --------------------------------------------------------------------------
@@ -530,11 +534,11 @@ export default function FaceLivenessScanner({
     const currentChallenge = challenges[currentStepIndex] || null;
 
     return (
-        <div className="flex flex-col items-center w-full max-w-md mx-auto p-5 bg-card text-card-foreground rounded-2xl shadow-md border border-border">
-            {/* Header */}
+        <div className="flex flex-col items-center w-full max-w-lg sm:max-w-xl mx-auto p-4 sm:p-6 bg-card text-card-foreground rounded-2xl sm:rounded-3xl shadow-lg border border-border transition-all">
+            {/* Header with Live Status & Mode Badge */}
             <div className="flex items-center justify-between w-full mb-3">
                 <div>
-                    <h2 className="text-lg font-bold">
+                    <h2 className="text-base sm:text-lg font-bold tracking-tight">
                         {mode === "enroll" ? "Biometric Face Registration" : "Live Liveness Verification"}
                     </h2>
                     <p className="text-xs text-muted-foreground">
@@ -542,15 +546,30 @@ export default function FaceLivenessScanner({
                     </p>
                 </div>
                 <div className="flex items-center gap-1.5">
-                    <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded bg-muted">
-                        Live
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[11px] font-mono font-semibold px-2.5 py-0.5 rounded-full bg-muted border border-border">
+                        Live Stream
                     </span>
                 </div>
             </div>
 
-            {/* Video + Oval Guide Viewport */}
-            <div className="relative w-full aspect-[4/3] bg-black rounded-xl overflow-hidden shadow-inner mb-3">
+            {/* Registration Metadata Banner (if user is registering with Name, Email, Phone) */}
+            {registrationData && (
+                <div className="w-full mb-3 px-3.5 py-2 bg-primary/10 border border-primary/20 rounded-xl flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 truncate">
+                        <span className="font-bold text-primary">{registrationData.fullName}</span>
+                        <span className="text-muted-foreground hidden sm:inline truncate">
+                            • {registrationData.email}
+                        </span>
+                    </div>
+                    <span className="text-[11px] font-mono font-medium text-foreground bg-background px-2 py-0.5 rounded-md border border-border flex-shrink-0 ml-2">
+                        {registrationData.phone}
+                    </span>
+                </div>
+            )}
+
+            {/* Video Viewport & Holographic Oval Guide */}
+            <div className="relative w-full aspect-[4/3] bg-black rounded-2xl overflow-hidden shadow-inner mb-3 border border-border/50">
                 <video
                     ref={videoRef}
                     autoPlay
@@ -562,7 +581,7 @@ export default function FaceLivenessScanner({
                 {/* Hidden canvas for snapshot texture & moiré analysis */}
                 <canvas ref={canvasRef} width={640} height={480} className="hidden" />
 
-                {/* Face Oval & Alignment Guide */}
+                {/* Face Oval & Alignment Guide with Directional Markers */}
                 <FaceOvalGuide
                     alignment={alignment}
                     currentStepState={
@@ -577,35 +596,56 @@ export default function FaceLivenessScanner({
                                     : "ALIGNING"
                     }
                     progressPercentage={actionProgress * 100}
+                    activeChallengeType={scannerStage === "RUNNING_CHALLENGE" ? currentChallenge?.type : null}
                 />
             </div>
 
-            {/* Status Message */}
-            <p className="text-xs font-medium text-muted-foreground mb-3 text-center min-h-[18px]">
+            {/* Dynamic Status Guidance Message */}
+            <p className="text-xs font-semibold text-muted-foreground mb-3 text-center min-h-[18px]">
                 {statusMessage}
             </p>
 
-            {/* Interactive Challenge Prompt or Result */}
-            {scannerStage === "RUNNING_CHALLENGE" && (
-                <ChallengePrompt
-                    challenge={currentChallenge}
-                    stepIndex={currentStepIndex}
-                    totalSteps={challenges.length}
-                    timeLeftSeconds={challengeTimeLeft}
-                    actionProgress={actionProgress}
-                />
+            {/* Contextual "WHEN & WHAT TO DO" Guidance Prompts */}
+            {(scannerStage === "ALIGNING" || scannerStage === "RUNNING_CHALLENGE") && (
+                <div className="w-full mb-3">
+                    <ChallengePrompt
+                        challenge={scannerStage === "RUNNING_CHALLENGE" ? currentChallenge : null}
+                        allChallenges={challenges}
+                        stepIndex={currentStepIndex}
+                        totalSteps={challenges.length || 3}
+                        timeLeftSeconds={challengeTimeLeft}
+                        actionProgress={actionProgress}
+                    />
+                </div>
+            )}
+
+            {/* Analysis State Banner */}
+            {(scannerStage === "EVALUATING_PASSIVE" || scannerStage === "SUBMITTING") && (
+                <div className="w-full mb-3 p-4 bg-cyan-500/10 border border-cyan-500/30 rounded-2xl flex items-center gap-3.5 animate-pulse">
+                    <div className="w-6 h-6 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin flex-shrink-0" />
+                    <div>
+                        <div className="text-xs font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-400">
+                            Evaluating Biometric Liveness
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Validating skin chrominance, 3D perspective disparity, and screen moiré patterns...
+                        </p>
+                    </div>
+                </div>
             )}
 
             {/* Result Modal */}
             {scannerStage === "SHOW_RESULT" && verificationResult && (
-                <LivenessResultModal
-                    result={verificationResult}
-                    onRetry={handleRetry}
-                    onContinue={verificationResult.verified ? () => onSuccess?.(verificationResult) : undefined}
-                />
+                <div className="w-full mb-3">
+                    <LivenessResultModal
+                        result={verificationResult}
+                        onRetry={handleRetry}
+                        onContinue={verificationResult.verified ? () => onSuccess?.(verificationResult) : undefined}
+                    />
+                </div>
             )}
 
-            {/* Telemetry Inspection Badge */}
+            {/* Telemetry Inspection Badge (collapsible) */}
             <LivenessTelemetryBadge
                 ear={liveEAR}
                 mar={liveMAR}

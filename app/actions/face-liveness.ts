@@ -1,7 +1,7 @@
 "use server";
 
 import crypto from "crypto";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { LIVENESS_CONFIG } from "@/lib/liveness/config";
 import type {
     ChallengeStep,
@@ -10,6 +10,8 @@ import type {
     LivenessVerificationRequest,
     LivenessVerificationResult,
     VerificationDecision,
+    UserRegistrationData,
+    UserProfileSummary,
 } from "@/lib/liveness/types";
 
 // In-memory fallback session store for development or environments where migration is pending
@@ -26,6 +28,28 @@ const memorySessions = new Map<
         used: boolean;
     }
 >();
+
+// In-memory registered user face profiles store (ensures 100% reliable local testbench & offline demo)
+interface EnrolledUserRecord {
+    userId: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    embedding: number[];
+    imagePath?: string;
+    createdAt: number;
+}
+const memoryRegisteredUsers = new Map<string, EnrolledUserRecord>();
+
+function calculateEuclideanDistance(vecA: number[], vecB: number[]): number {
+    let sum = 0;
+    const len = Math.min(vecA.length, vecB.length);
+    for (let i = 0; i < len; i++) {
+        const diff = vecA[i] - vecB[i];
+        sum += diff * diff;
+    }
+    return Math.sqrt(sum);
+}
 
 // In-memory rate limiting tracker fallback
 const memoryRateLimits = new Map<string, { attempts: number; lockedUntil: number }>();
@@ -380,6 +404,7 @@ export async function verifyLivenessSessionAction(
     // 6. Identity Matching or Enrollment (if not spoofed)
     // --------------------------------------------------------------------------
     let matchDistance: number | undefined;
+    let userProfileSummary: UserProfileSummary | undefined;
 
     if (decision === "VERIFIED") {
         if (!descriptor || descriptor.length !== 128) {
@@ -396,6 +421,9 @@ export async function verifyLivenessSessionAction(
 
         if (mode === "verify") {
             const vectorString = `[${descriptor.join(",")}]`;
+            let matchFound = false;
+
+            // 1. Try Supabase verify_user_face RPC (pgvector cosine/euclidean distance)
             try {
                 const { data: matchData, error: matchError } = await supabase.rpc(
                     "verify_user_face",
@@ -405,48 +433,238 @@ export async function verifyLivenessSessionAction(
                     }
                 );
 
-                if (matchError || !matchData || matchData.length === 0) {
-                    decision = "FAILED";
-                    rejectionReason = "No enrolled face found or database query failed.";
-                } else {
-                    const { is_match, distance } = matchData[0];
-                    matchDistance = Number(distance.toFixed(4));
-                    if (!is_match) {
-                        decision = "FAILED";
-                        rejectionReason = `Face does not match registered profile. (Distance: ${matchDistance} > ${LIVENESS_CONFIG.MATCH_DISTANCE_THRESHOLD})`;
+                if (!matchError && matchData && matchData.length > 0) {
+                    const matchRow = matchData[0];
+                    matchDistance = Number(matchRow.distance.toFixed(4));
+                    if (matchRow.is_match) {
+                        matchFound = true;
+                        userProfileSummary = {
+                            userId: matchRow.user_id,
+                            fullName: matchRow.full_name || "Verified User",
+                            email: matchRow.email,
+                            phone: matchRow.phone,
+                        };
                     }
                 }
             } catch (rpcErr) {
-                console.warn("verify_user_face RPC error (fallback to verified if enrollment demo):", rpcErr);
-                matchDistance = 0.28; // Default mock distance for testing if DB table not yet connected
+                console.warn("[FaceLiveness] verify_user_face RPC error, checking memory fallback:", rpcErr);
             }
-        } else if (mode === "enroll" && user) {
-            // Upload to Supabase Storage and upsert user_face_profiles
-            try {
-                let filePath = `${user.id}/reference-${Date.now()}.jpg`;
+
+            // 2. Memory fallback for local development or pending Supabase migration
+            if (!matchFound && memoryRegisteredUsers.size > 0) {
+                let bestDistance = Infinity;
+                let bestUser: EnrolledUserRecord | null = null;
+
+                for (const record of memoryRegisteredUsers.values()) {
+                    const dist = calculateEuclideanDistance(record.embedding, descriptor);
+                    if (dist < bestDistance) {
+                        bestDistance = dist;
+                        bestUser = record;
+                    }
+                }
+
+                if (bestUser && bestDistance <= LIVENESS_CONFIG.MATCH_DISTANCE_THRESHOLD) {
+                    matchFound = true;
+                    matchDistance = Number(bestDistance.toFixed(4));
+                    userProfileSummary = {
+                        userId: bestUser.userId,
+                        fullName: bestUser.fullName,
+                        email: bestUser.email,
+                        phone: bestUser.phone,
+                    };
+                }
+            }
+
+            if (!matchFound) {
+                decision = "FAILED";
+                rejectionReason = "Biometric identification failed: Face does not match any registered profile.";
+            }
+        } else if (mode === "enroll") {
+            // Check if user is registering new profile with name, email, and phone
+            if (request.registrationData) {
+                const reg = request.registrationData;
+                const fullName = reg.fullName?.trim() || "";
+                const email = reg.email?.trim().toLowerCase() || "";
+                const phone = reg.phone?.trim() || "";
+
+                if (!fullName || fullName.length < 2) {
+                    return {
+                        decision: "FAILED",
+                        verified: false,
+                        message: "Registration failed: Please enter a valid full name (at least 2 characters).",
+                        passiveScore,
+                        confidence: 0,
+                        spoofIndicators: ["INVALID_REGISTRATION_DATA"],
+                        rejectionReason: "Full name must be at least 2 characters.",
+                    };
+                }
+
+                if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    return {
+                        decision: "FAILED",
+                        verified: false,
+                        message: "Registration failed: Please enter a valid email address.",
+                        passiveScore,
+                        confidence: 0,
+                        spoofIndicators: ["INVALID_REGISTRATION_DATA"],
+                        rejectionReason: "Invalid email format.",
+                    };
+                }
+
+                if (!phone || phone.replace(/\D/g, "").length < 7) {
+                    return {
+                        decision: "FAILED",
+                        verified: false,
+                        message: "Registration failed: Please enter a valid phone number (at least 7 digits).",
+                        passiveScore,
+                        confidence: 0,
+                        spoofIndicators: ["INVALID_REGISTRATION_DATA"],
+                        rejectionReason: "Invalid phone number format.",
+                    };
+                }
+
+                let registeredUserId = user?.id || crypto.randomUUID();
+
+                // 1. Create or register user in Supabase Auth if admin credentials present
+                try {
+                    const adminClient = createAdminClient();
+                    if (adminClient) {
+                        const { data: createdUser, error: createError } = await adminClient.auth.admin.createUser({
+                            email,
+                            phone: phone.startsWith("+") ? phone : undefined,
+                            password: reg.password || `BioAuth_${crypto.randomBytes(8).toString("hex")}!`,
+                            email_confirm: true,
+                            user_metadata: {
+                                full_name: fullName,
+                                phone: phone,
+                            },
+                        });
+                        if (createdUser?.user) {
+                            registeredUserId = createdUser.user.id;
+                        } else if (createError && !createError.message.includes("already registered")) {
+                            console.warn("[FaceLiveness] Supabase admin createUser notice:", createError.message);
+                        }
+                    }
+                } catch (authErr) {
+                    console.warn("[FaceLiveness] Supabase admin registration bypassed/offline:", authErr);
+                }
+
+                // 2. Upload reference image to Supabase Storage
+                let filePath = `${registeredUserId}/reference-${Date.now()}.jpg`;
                 if (imageBase64) {
-                    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-                    const buffer = Buffer.from(base64Data, "base64");
-                    await supabase.storage.from("face-verifications").upload(filePath, buffer, {
-                        contentType: "image/jpeg",
-                        upsert: true,
-                    });
-                } else {
-                    filePath = `${user.id}/reference.jpg`;
+                    try {
+                        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+                        const buffer = Buffer.from(base64Data, "base64");
+                        await supabase.storage.from("face-verifications").upload(filePath, buffer, {
+                            contentType: "image/jpeg",
+                            upsert: true,
+                        });
+                    } catch {
+                        filePath = `${registeredUserId}/reference.jpg`;
+                    }
+                }
+
+                // 3. Upsert into Supabase public.user_face_profiles
+                const vectorString = `[${descriptor.join(",")}]`;
+                try {
+                    await supabase.from("user_face_profiles").upsert(
+                        {
+                            user_id: registeredUserId,
+                            full_name: fullName,
+                            email: email,
+                            phone: phone,
+                            image_path: filePath,
+                            embedding: vectorString,
+                            updated_at: new Date().toISOString(),
+                        },
+                        { onConflict: "user_id" }
+                    );
+                } catch (dbErr) {
+                    console.warn("[FaceLiveness] Could not write user_face_profiles to database:", dbErr);
+                }
+
+                // 4. Save to in-memory registered profile store
+                memoryRegisteredUsers.set(registeredUserId, {
+                    userId: registeredUserId,
+                    fullName,
+                    email,
+                    phone,
+                    embedding: descriptor,
+                    imagePath: filePath,
+                    createdAt: Date.now(),
+                });
+
+                userProfileSummary = {
+                    userId: registeredUserId,
+                    fullName,
+                    email,
+                    phone,
+                };
+            } else if (user) {
+                // Existing authenticated user enrolling face
+                const registeredUserId = user.id;
+                let filePath = `${registeredUserId}/reference-${Date.now()}.jpg`;
+                if (imageBase64) {
+                    try {
+                        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+                        const buffer = Buffer.from(base64Data, "base64");
+                        await supabase.storage.from("face-verifications").upload(filePath, buffer, {
+                            contentType: "image/jpeg",
+                            upsert: true,
+                        });
+                    } catch {
+                        filePath = `${registeredUserId}/reference.jpg`;
+                    }
                 }
 
                 const vectorString = `[${descriptor.join(",")}]`;
-                await supabase.from("user_face_profiles").upsert(
-                    {
-                        user_id: user.id,
-                        image_path: filePath,
-                        embedding: vectorString,
-                        updated_at: new Date().toISOString(),
-                    },
-                    { onConflict: "user_id" }
-                );
-            } catch (enrollErr) {
-                console.warn("Database enroll update error:", enrollErr);
+                const fullName = user.user_metadata?.full_name || user.email?.split("@")[0] || "User";
+                const email = user.email || "";
+                const phone = user.phone || user.user_metadata?.phone || "";
+
+                try {
+                    await supabase.from("user_face_profiles").upsert(
+                        {
+                            user_id: registeredUserId,
+                            full_name: fullName,
+                            email: email,
+                            phone: phone,
+                            image_path: filePath,
+                            embedding: vectorString,
+                            updated_at: new Date().toISOString(),
+                        },
+                        { onConflict: "user_id" }
+                    );
+                } catch (dbErr) {
+                    console.warn("[FaceLiveness] Could not write user_face_profiles to database:", dbErr);
+                }
+
+                memoryRegisteredUsers.set(registeredUserId, {
+                    userId: registeredUserId,
+                    fullName,
+                    email,
+                    phone,
+                    embedding: descriptor,
+                    imagePath: filePath,
+                    createdAt: Date.now(),
+                });
+
+                userProfileSummary = {
+                    userId: registeredUserId,
+                    fullName,
+                    email,
+                    phone,
+                };
+            } else {
+                return {
+                    decision: "FAILED",
+                    verified: false,
+                    message: "Registration required. Please provide your Name, Email, and Phone to enroll.",
+                    passiveScore,
+                    confidence: 0,
+                    spoofIndicators: ["UNAUTHENTICATED_ENROLLMENT"],
+                    rejectionReason: "User registration details (name, email, phone) required.",
+                };
             }
         }
     }
@@ -454,7 +672,7 @@ export async function verifyLivenessSessionAction(
     // --------------------------------------------------------------------------
     // 7. Audit Logging & Rate Limiting Update
     // --------------------------------------------------------------------------
-    const rateLimitKey = session.userId || "anonymous-ip";
+    const rateLimitKey = session.userId || userProfileSummary?.userId || "anonymous-ip";
     if (decision === "VERIFIED") {
         memoryRateLimits.delete(rateLimitKey);
         session.status = "COMPLETED";
@@ -473,7 +691,7 @@ export async function verifyLivenessSessionAction(
     try {
         await supabase.from("face_verification_logs").insert({
             session_id: session.sessionId,
-            user_id: session.userId,
+            user_id: session.userId || userProfileSummary?.userId,
             mode,
             decision,
             rejection_reason: rejectionReason,
@@ -494,6 +712,12 @@ export async function verifyLivenessSessionAction(
         message = "Liveness check inconclusive. Please ensure good lighting and try again.";
     } else if (decision === "FAILED") {
         message = rejectionReason || "Verification failed.";
+    } else if (decision === "VERIFIED") {
+        if (mode === "enroll" && userProfileSummary) {
+            message = `Account created and face registered successfully for ${userProfileSummary.fullName}!`;
+        } else if (mode === "verify" && userProfileSummary) {
+            message = `Welcome back, ${userProfileSummary.fullName}! Identity verified.`;
+        }
     }
 
     return {
@@ -506,6 +730,19 @@ export async function verifyLivenessSessionAction(
         spoofIndicators,
         rejectionReason,
         auditLogId: session.sessionId,
+        userProfile: userProfileSummary,
     };
+}
+
+/**
+ * Server Action: Register a new user with Name, Email, Phone, and Face Biometric Liveness
+ */
+export async function registerUserWithFaceAction(
+    request: LivenessVerificationRequest & { registrationData: UserRegistrationData }
+): Promise<LivenessVerificationResult> {
+    return verifyLivenessSessionAction({
+        ...request,
+        mode: "enroll",
+    });
 }
 

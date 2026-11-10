@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { createClient as createSupabaseJsClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 
 export async function createClient() {
@@ -28,4 +29,24 @@ export async function createClient() {
       },
     }
   )
+}
+
+/**
+ * Service Role client for administrative operations (e.g. creating users, service-level updates).
+ * Used exclusively inside server actions.
+ */
+export function createAdminClient() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+  if (!url || !serviceRoleKey) {
+    return null;
+  }
+
+  return createSupabaseJsClient(url, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
 }
